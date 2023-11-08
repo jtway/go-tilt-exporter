@@ -1,2 +1,2 @@
 # go-tilt-exporter
-Tilt Hydrometer (Unofficial) Exporter written in Golan
+Tilt Hydrometer (Unofficial) Exporter written in Golang
