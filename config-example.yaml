@@ -1,0 +1,17 @@
+
+brewfather:
+  # User ID from Brewfather
+  user_id: "your_user_id"
+  # API Key from Brewfather
+  api_key: "your_api_key"
+  # Frequency at which the Brewfather API will be queried for in-progress batches
+  update_interval: 15m
+  # Webooks here show up as custom streams. When taking readings from a Tilt the
+  # if there is a matching stream associated with a batch it will automatically update
+  webooks:
+    - name: "brewtracker"
+      url: "http://log.brewfather.net/stream?id=your_id"
+      update_interval: 15m
+prom:
+  # Prometheus port to expose metrics on
+  port: 9100
