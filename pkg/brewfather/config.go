@@ -12,5 +12,5 @@ type Config struct {
 	UserId         string          `mapstructure:"user_id"`
 	ApiKey         string          `mapstructure:"api_key"`
 	UpdateInterval time.Duration   `mapstructure:"update_interval"`
-	Webhooks       []WebhookConfig `mapstructure:"webooks"`
+	Webhooks       []WebhookConfig `mapstructure:"webhooks"`
 }

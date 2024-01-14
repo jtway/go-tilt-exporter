@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -30,6 +31,7 @@ func NewBrewfatherClient(config *Config) *BrewfatherClient {
 	}
 
 	for _, webhookConfig := range config.Webhooks {
+		fmt.Printf("Creating webhook %s\n", webhookConfig.Name)
 		brewClient.webhooks[webhookConfig.Name] = NewBrewTrackerWebhook(&webhookConfig)
 	}
 	return brewClient
@@ -79,7 +81,18 @@ func (b *BrewfatherClient) GetBatch(batchId string) (*Batch, error) {
 	if err := json.Unmarshal(body, &batch); err != nil { // Parse []byte to the go struct pointer
 		return nil, fmt.Errorf("Can not unmarshal JSON")
 	}
+	streams := batch.GetStreams()
+	if len(streams) != 0 {
+		for _, stream := range streams {
+			for name, webhook := range b.webhooks {
+				if strings.EqualFold(stream.Name, name) {
+					fmt.Printf("Attached webhook %s to %s\n", name, batch.Name)
+					batch.BrewTracker = webhook
 
+				}
+			}
+		}
+	}
 	return &batch, nil
 }
 
@@ -99,12 +112,9 @@ func (b *BrewfatherClient) GetActiveBatches() ([]Batch, error) {
 			if err != nil {
 				return nil, err
 			}
+
 			activeBatches = append(activeBatches, *batch)
 		}
 	}
 	return activeBatches, nil
-}
-
-func (b *BrewfatherClient) WebhookUpdate(beer string, gravity float32, temp float32) error {
-	return nil
 }

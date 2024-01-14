@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const webhookName = "brewtracker"
-
 type BrewTrackerWebhook struct {
 	config     *WebhookConfig
 	lastUpdate time.Time
@@ -20,7 +18,7 @@ type BrewTrackerWebhook struct {
 type BrewTrackerStatus struct {
 	Name        string  `json:"name"`
 	BeerName    string  `json:"beer"`
-	Gravity     float32 `json:"gravity"`
+	Gravity     float64 `json:"gravity"`
 	GravityUnit string  `json:"gravity_unit"`
 	Temperature float32 `json:"temp"`
 	TempUnit    string  `json:"temp_unit"`
@@ -38,7 +36,7 @@ func NewBrewTrackerWebhook(config *WebhookConfig) *BrewTrackerWebhook {
 	return webhook
 }
 
-func (bt *BrewTrackerWebhook) Update(beer string, gravity float32, temp float32) error {
+func (bt *BrewTrackerWebhook) Update(beer string, gravity float64, temp float32) error {
 	nextUpdate := bt.lastUpdate.Add(bt.config.UpdateInterval)
 	if nextUpdate.After(time.Now()) {
 		// Silently return, no error, just not time.

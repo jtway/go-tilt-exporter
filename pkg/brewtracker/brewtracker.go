@@ -13,11 +13,11 @@ import (
 )
 
 type BrewTracker struct {
-	config  *Config
+	Config  *Config
 	metrics *metrics
-	logger  *zap.SugaredLogger
+	Logger  *zap.SugaredLogger
 
-	brewfatherClient     *brewfather.BrewfatherClient
+	BrewfatherClient     *brewfather.BrewfatherClient
 	brewFatherLastUpdate time.Time
 
 	scannerRunDone       context.Context
@@ -28,76 +28,95 @@ func NewBrewTracker() *BrewTracker {
 	var bt BrewTracker
 
 	bt.metrics = NewMetrics()
-	bt.logger = zap.NewExample().Sugar()
+	bt.Logger = zap.NewExample().Sugar()
 
 	config, err := ReadInConfig()
-	bt.logger.Infof("Read Config File: %s", viper.ConfigFileUsed())
+	bt.Logger.Infof("Read Config File: %s", viper.ConfigFileUsed())
 	if err != nil {
 		panic(fmt.Errorf("Failed to read and set config, %w", err))
 	}
 	if config == nil {
 		panic(fmt.Errorf("Unexpected nil config."))
 	}
-	bt.config = config
-	bt.brewfatherClient = brewfather.NewBrewfatherClient(&config.Brewfather)
+	bt.Config = config
+	bt.BrewfatherClient = brewfather.NewBrewfatherClient(&config.Brewfather)
 	bt.scannerRunDone, bt.scannerRunDoneCancel = context.WithCancel(context.Background())
 
 	return &bt
 }
 
-func (bt *BrewTracker) recordMetics() {
+// Setup the scanner, with it running until canceled.
+// Use a ticker to retrieve batches every so often
+// For each tilt received check current batches and update.
+// Then report metrics.
+// I could use another ticket for the webhook, or just use the internalized rate limit
+
+// Run until canceled.
+func (bt *BrewTracker) Run() error {
+	defer bt.Logger.Sync()
 	// We're realistically going to want to do this periodically
 	// Also, this all needs to be refactored to be way more efficient
-	batches, err := bt.brewfatherClient.GetActiveBatches()
+	bt.Logger.Infof("Fetching initial batches")
+	batches, err := bt.BrewfatherClient.GetActiveBatches()
 	bt.brewFatherLastUpdate = time.Now()
 	if err != nil {
-		panic(fmt.Errorf("Unable to retrieve batches, %w", err))
+		return fmt.Errorf("Unable to retrieve batches, %w", err)
 	}
+	bt.Logger.Infof("Working with %d active batches", len(batches))
 
 	s := tilt.NewScanner()
 	go func() {
 		for {
-			if bt.brewFatherLastUpdate.Add(bt.config.Brewfather.UpdateInterval).Before(time.Now()) {
-				batches, err = bt.brewfatherClient.GetActiveBatches()
+			if bt.brewFatherLastUpdate.Add(bt.Config.Brewfather.UpdateInterval).Before(time.Now()) {
+				bt.Logger.Infof("Fetching updated active batches.")
+				updatedBatches, err := bt.BrewfatherClient.GetActiveBatches()
 				bt.brewFatherLastUpdate = time.Now()
 				if err != nil {
-					panic(fmt.Errorf("Unable to retrieve batches, %w", err))
+					bt.Logger.Errorf("Unable to retrieve batches, %s", err.Error())
 				}
+				// Only if we got a valid response swap them out.
+				if len(updatedBatches) > 0 {
+					batches = updatedBatches
+				}
+				bt.Logger.Infof("Refreshed batches with %d active batches.", len(batches))
 			}
+			// Eventually it would be nice for the bluetooth scanning, and other telemetry to
+			// be another go routine. That way on the update interval we would just grab the
+			// latest readings.
 			s.Scan(20 * time.Second)
-			fmt.Printf("Found %d tilts", len(s.Tilts()))
+			bt.Logger.Infof("Scanning found %d tilts", len(s.Tilts()))
 			for _, t := range s.Tilts() {
 				name := "unknown"
 				for _, batch := range batches {
-					for _, tilt := range batch.Devices.Tilt.Items {
+					for _, tilt := range batch.GetTilts() {
 						color := string(t.Colour())
+						// Increment counter for readings for the tilt
+						bt.metrics.beerReading.WithLabelValues(color).Inc()
+
 						if strings.EqualFold(tilt.Name, color) {
+							// If we have a matching tilt, update using our custom stream
+							bt.Logger.Infof("Update batch telemtry via webhook")
+							err := batch.UpdateWebhook(t.Gravity(), float32(t.Fahrenheit()))
+							if err != nil {
+								bt.Logger.Errorf("Unable to update via webhook: %s", err.Error())
+							}
 							name = batch.Name
-							beerMeasuredOriginalGravity.WithLabelValues(batch.Id, name, color).Set(float64(batch.MeasuredOg))
-							beerEstimatedFinalGravity.WithLabelValues(batch.Id, name, color).Set(float64(batch.EstimatedFg))
-							beerEstimatedIbu.WithLabelValues(batch.Id, name, color).Set(float64(batch.EstimatedIbu))
-							beerEstimatedSrm.WithLabelValues(batch.Id, name, color).Set(float64(batch.EstimatedColor))
+
+							bt.metrics.beerMeasuredOriginalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.MeasuredOg))
+							bt.metrics.beerEstimatedFinalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedFg))
+							bt.metrics.beerEstimatedIbu.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedIbu))
+							bt.metrics.beerEstimatedSrm.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedColor))
+							bt.metrics.beerGravity.WithLabelValues(batch.Id, name, color).Set(t.Gravity())
+							bt.metrics.beerTemperatureF.WithLabelValues(batch.Id, name, color).Set(float64(t.Fahrenheit()))
+							bt.metrics.beerTemperatureC.WithLabelValues(color, name, color).Set(float64(t.Celsius()))
 						}
 					}
 				}
-				beerReading.WithLabelValues(string(t.Colour())).Inc()
-				beerGravity.WithLabelValues(string(t.Colour()), name).Set(t.Gravity())
-				beerTemperatureF.WithLabelValues(string(t.Colour()), name).Set(float64(t.Fahrenheit()))
-				beerTemperatureC.WithLabelValues(string(t.Colour()), name).Set(float64(t.Celsius()))
+
 			}
 			time.Sleep(10 * time.Second)
 		}
 	}()
-}
-
-// Run until canceled.
-func (bt *BrewTracker) Run() error {
-
-	// Setup the scanner, with it running until canceled.
-	// Use a ticker to retrieve batches every so often
-	// For each tilt received check current batches and update.
-	// Then report metrics.
-	// I could use another ticket for the webhook, or just use the internalized rate limit
 
 	return nil
 }

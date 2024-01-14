@@ -8,7 +8,7 @@ import (
 )
 
 type ConfigPrometheus struct {
-	Port uint16 `mapstructure:"port"`
+	Port int `mapstructure:"port"`
 }
 
 type Config struct {

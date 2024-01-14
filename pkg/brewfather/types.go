@@ -1,5 +1,7 @@
 package brewfather
 
+import "fmt"
+
 type Status string
 
 const (
@@ -62,13 +64,27 @@ type Yeast struct {
 
 // @TODO Hops (Once Hops maybe pull recipe)
 
+type TiltKey string
+
+const (
+	Unknown TiltKey = ""
+	Black   TiltKey = "BLACK"
+	Blue    TiltKey = "BLUE"
+	Green   TiltKey = "GREEN"
+	Orange  TiltKey = "ORANGE"
+	Pink    TiltKey = "PINK"
+	Purple  TiltKey = "PURPLE"
+	Red     TiltKey = "RED"
+	Yellow  TiltKey = "YELLOW"
+)
+
 type TiltDevice struct {
-	Hidden  bool   `json:"hidden"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	BatchId string `json:"batchId"`
-	Key     string `json:"key"`
-	Enabled bool   `json:"enabled"`
+	Hidden  bool    `json:"hidden"`
+	Name    string  `json:"name"`
+	Type    string  `json:"type"`
+	BatchId string  `json:"batchId"`
+	Key     TiltKey `json:"key"`
+	Enabled bool    `json:"enabled"`
 }
 type TiltDevices struct {
 	Mode    string       `json:"mode"`
@@ -120,4 +136,21 @@ type Batch struct {
 	EstimatedBuGuRation      float32 `json:"estimatedBuGuRatio"`
 	MeasuredOg               float32 `json:"measuredOg"`
 	Brewer                   string  `json:"brewer"`
+
+	BrewTracker *BrewTrackerWebhook `json:"-"`
+}
+
+func (b *Batch) GetTilts() []TiltDevice {
+	return b.Devices.Tilt.Items
+}
+
+func (b *Batch) GetStreams() []Stream {
+	return b.Devices.Streams.Streams
+}
+
+func (b *Batch) UpdateWebhook(gravity float64, temp float32) error {
+	if b.BrewTracker == nil {
+		return fmt.Errorf("No brewtracker webhook to update")
+	}
+	return b.BrewTracker.Update(b.Name, gravity, temp)
 }
