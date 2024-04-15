@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -15,15 +17,17 @@ const (
 
 type BrewfatherClient struct {
 	client *http.Client
+	logger *zap.SugaredLogger
 	config *Config
 
 	webhooks map[string]*BrewTrackerWebhook
 }
 
-func NewBrewfatherClient(config *Config) *BrewfatherClient {
+func NewBrewfatherClient(config *Config, logger *zap.SugaredLogger) *BrewfatherClient {
 
 	brewClient := &BrewfatherClient{
 		config:   config,
+		logger:   logger,
 		webhooks: make(map[string]*BrewTrackerWebhook),
 	}
 	brewClient.client = &http.Client{
@@ -38,6 +42,7 @@ func NewBrewfatherClient(config *Config) *BrewfatherClient {
 }
 
 func (b *BrewfatherClient) GetBatches() ([]BatchShort, error) {
+	var batches []BatchShort
 	url := api_base_url + "batches"
 
 	request, err := http.NewRequest("GET", url, nil)
@@ -45,19 +50,34 @@ func (b *BrewfatherClient) GetBatches() ([]BatchShort, error) {
 		return nil, err
 	}
 	request.SetBasicAuth(b.config.UserId, b.config.ApiKey)
-	response, err := b.client.Do(request)
-	if err != nil {
-		return nil, err
+
+	for {
+		response, err := b.client.Do(request)
+		if err != nil {
+			return batches, err
+		}
+		defer response.Body.Close()
+
+		body, err := io.ReadAll(response.Body) // response body is []byte
+
+		var batchesPage []BatchShort
+		if err := json.Unmarshal(body, &batchesPage); err != nil { // Parse []byte to the go struct pointer
+			return batches, fmt.Errorf("Can not unmarshal JSON")
+		}
+
+		batchesReturned := len(batchesPage)
+		b.logger.Infof("returned %d batches", batchesReturned)
+		if batchesReturned == 0 {
+			break
+		}
+
+		batches = append(batches, batchesPage...)
+
+		queryValues := request.URL.Query()
+		queryValues.Add("start_after", batchesPage[batchesReturned-1].Id)
+		request.URL.RawQuery = queryValues.Encode()
+		b.logger.Infof("attempting to get more batches")
 	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body) // response body is []byte
-
-	var batches []BatchShort
-	if err := json.Unmarshal(body, &batches); err != nil { // Parse []byte to the go struct pointer
-		return nil, fmt.Errorf("Can not unmarshal JSON")
-	}
-
 	return batches, nil
 }
 
@@ -98,14 +118,16 @@ func (b *BrewfatherClient) GetBatch(batchId string) (*Batch, error) {
 
 func (b *BrewfatherClient) GetActiveBatches() ([]Batch, error) {
 	batches, err := b.GetBatches()
-	if err != nil {
+	if len(batches) == 0 && err != nil {
 		return nil, err
+	}
+	if err != nil {
+		b.logger.Infof("Batches were returned, but so was an error: %s", err.Error())
 	}
 
 	var activeBatches []Batch
 	for _, batchShort := range batches {
-		fmt.Printf("Batch Name: %s\n", batchShort.Name)
-		fmt.Printf("Status %s\n", batchShort.Status)
+		b.logger.Infof("Batch Name: %s, Status: %s", batchShort.Name, batchShort.Status)
 		if batchShort.Status == Fermenting || batchShort.Status == Conditioning {
 			batchId := batchShort.Id
 			batch, err := b.GetBatch(batchId)

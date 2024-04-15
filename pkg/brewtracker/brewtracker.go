@@ -39,7 +39,7 @@ func NewBrewTracker() *BrewTracker {
 		panic(fmt.Errorf("Unexpected nil config."))
 	}
 	bt.Config = config
-	bt.BrewfatherClient = brewfather.NewBrewfatherClient(&config.Brewfather)
+	bt.BrewfatherClient = brewfather.NewBrewfatherClient(&config.Brewfather, bt.Logger)
 	bt.scannerRunDone, bt.scannerRunDoneCancel = context.WithCancel(context.Background())
 
 	return &bt
