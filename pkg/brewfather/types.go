@@ -144,13 +144,23 @@ func (b *Batch) GetTilts() []TiltDevice {
 	return b.Devices.Tilt.Items
 }
 
+func (b *Batch) GetTilt() *TiltDevice {
+	tilts := b.GetTilts()
+	for _, tilt := range tilts {
+		if tilt.Enabled {
+			return &tilt
+		}
+	}
+	return nil
+}
+
 func (b *Batch) GetStreams() []Stream {
 	return b.Devices.Streams.Streams
 }
 
-func (b *Batch) UpdateWebhook(gravity float64, temp float32) error {
+func (b *Batch) UpdateWebhook(update *BrewTrackerStatus) error {
 	if b.BrewTracker == nil {
 		return fmt.Errorf("No brewtracker webhook to update")
 	}
-	return b.BrewTracker.Update(b.Name, gravity, temp)
+	return b.BrewTracker.Update(update)
 }

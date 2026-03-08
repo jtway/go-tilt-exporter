@@ -45,6 +45,15 @@ func NewBrewTracker() *BrewTracker {
 	return &bt
 }
 
+func mixedCaseTiltColor(tiltColor string) string {
+	firstLetter := string(tiltColor[0]) // Get the first character
+	restOfString := tiltColor[1:]       // Get the rest of the string
+
+	lowerRest := strings.ToLower(restOfString) // Convert the rest to lowercase
+
+	return firstLetter + lowerRest // Combine the first letter and the lowercased rest
+}
+
 // Setup the scanner, with it running until canceled.
 // Use a ticker to retrieve batches every so often
 // For each tilt received check current batches and update.
@@ -66,7 +75,9 @@ func (bt *BrewTracker) Run() error {
 
 	s := tilt.NewScanner()
 	go func() {
+		timeBetween := time.Now()
 		for {
+
 			if bt.brewFatherLastUpdate.Add(bt.Config.Brewfather.UpdateInterval).Before(time.Now()) {
 				bt.Logger.Infof("Fetching updated active batches.")
 				updatedBatches, err := bt.BrewfatherClient.GetActiveBatches()
@@ -83,38 +94,66 @@ func (bt *BrewTracker) Run() error {
 			// Eventually it would be nice for the bluetooth scanning, and other telemetry to
 			// be another go routine. That way on the update interval we would just grab the
 			// latest readings.
-			s.Scan(20 * time.Second)
+			s.Scan(15 * time.Second)
 			bt.Logger.Infof("Scanning found %d tilts", len(s.Tilts()))
-			for _, t := range s.Tilts() {
-				name := "unknown"
-				for _, batch := range batches {
-					for _, tilt := range batch.GetTilts() {
-						color := string(t.Colour())
-						// Increment counter for readings for the tilt
-						bt.metrics.beerReading.WithLabelValues(color).Inc()
-
-						if strings.EqualFold(tilt.Name, color) {
-							// If we have a matching tilt, update using our custom stream
-							bt.Logger.Infof("Update batch telemtry via webhook")
-							err := batch.UpdateWebhook(t.Gravity(), float32(t.Fahrenheit()))
-							if err != nil {
-								bt.Logger.Errorf("Unable to update via webhook: %s", err.Error())
-							}
-							name = batch.Name
-
-							bt.metrics.beerMeasuredOriginalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.MeasuredOg))
-							bt.metrics.beerEstimatedFinalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedFg))
-							bt.metrics.beerEstimatedIbu.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedIbu))
-							bt.metrics.beerEstimatedSrm.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedColor))
-							bt.metrics.beerGravity.WithLabelValues(batch.Id, name, color).Set(t.Gravity())
-							bt.metrics.beerTemperatureF.WithLabelValues(batch.Id, name, color).Set(float64(t.Fahrenheit()))
-							bt.metrics.beerTemperatureC.WithLabelValues(color, name, color).Set(float64(t.Celsius()))
-						}
-					}
+			foundTilts := s.Tilts()
+			// for _, t := range s.Tilts() {
+			name := "unknown"
+			// var updates []brewfather.BrewTrackerStatus
+			for _, batch := range batches {
+				batchTilt := batch.GetTilt()
+				if batchTilt == nil {
+					bt.Logger.Infof("No Tilt found for batch %s")
+					continue
+				}
+				var color tilt.Colour = tilt.Colour(mixedCaseTiltColor(batchTilt.Name))
+				var t tilt.Tilt
+				if device, ok := foundTilts[color]; !ok {
+					bt.Logger.Infof("Requested tilt %s not found for batch %s", batchTilt.Name)
+					continue
+				} else {
+					t = device
 				}
 
+				// Increment counter for readings for the tilt
+				bt.metrics.beerReading.WithLabelValues(string(color)).Inc()
+
+				if strings.EqualFold(batchTilt.Name, string(color)) {
+					name = batch.Name
+					// If we have a matching tilt, update using our custom stream
+					bt.Logger.Infof("Update batch telemtry via webhook, %s, %s, %f %f", string(color), name, t.Gravity(), float64(t.Fahrenheit()))
+					// @TODO(jtway) This is a bit hacky, I really should rethink how I set this up.
+					// updates = append(updates, brewfather.BrewTrackerStatus{
+					// 	Name:        "BrewTracker-" + string(color),
+					// 	Temperature: float32(t.Fahrenheit()),
+					// 	TempUnit:    "F",
+					// 	Gravity:     t.Gravity(),
+					// 	GravityUnit: "G",
+					// })
+
+					err := batch.UpdateWebhook(&brewfather.BrewTrackerStatus{
+						Name:        "BrewTracker" + string(color),
+						Temperature: float32(t.Fahrenheit()),
+						TempUnit:    "F",
+						Gravity:     t.Gravity(),
+						GravityUnit: "G",
+					})
+					if err != nil {
+						bt.Logger.Errorf("Unable to update via webhook: %s", err.Error())
+					}
+
+					bt.metrics.beerMeasuredOriginalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.MeasuredOg))
+					bt.metrics.beerEstimatedFinalGravity.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedFg))
+					bt.metrics.beerEstimatedIbu.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedIbu))
+					bt.metrics.beerEstimatedSrm.WithLabelValues(batch.Id, name).Set(float64(batch.EstimatedColor))
+					bt.metrics.beerGravity.WithLabelValues(batch.Id, name, string(color)).Set(t.Gravity())
+					bt.metrics.beerTemperatureF.WithLabelValues(batch.Id, name, string(color)).Set(float64(t.Fahrenheit()))
+					bt.metrics.beerTemperatureC.WithLabelValues(string(color), name, string(color)).Set(float64(t.Celsius()))
+				}
 			}
-			time.Sleep(10 * time.Second)
+
+			fmt.Printf("Time Elapsed: %f\n", time.Now().Sub(timeBetween).Abs().Seconds())
+			timeBetween = time.Now()
 		}
 	}()
 

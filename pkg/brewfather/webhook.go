@@ -32,24 +32,26 @@ type BrewTrackerStatusResponse struct {
 func NewBrewTrackerWebhook(config *WebhookConfig) *BrewTrackerWebhook {
 	webhook := &BrewTrackerWebhook{
 		config: config,
+		// lastUpdate: time.Now(),
 	}
 	return webhook
 }
 
-func (bt *BrewTrackerWebhook) Update(beer string, gravity float64, temp float32) error {
+func (bt *BrewTrackerWebhook) Update(update *BrewTrackerStatus) error {
+	// func (bt *BrewTrackerWebhook) Update(beer string, gravity float64, temp float32) error {
 	nextUpdate := bt.lastUpdate.Add(bt.config.UpdateInterval)
 	if nextUpdate.After(time.Now()) {
 		// Silently return, no error, just not time.
 		return nil
 	}
 
-	update := &BrewTrackerStatus{
-		Name:        bt.config.Name,
-		Temperature: temp,
-		TempUnit:    "F",
-		Gravity:     gravity,
-		GravityUnit: "G",
-	}
+	// update := &BrewTrackerStatus{
+	// 	Name:        bt.config.Name,
+	// 	Temperature: temp,
+	// 	TempUnit:    "F",
+	// 	Gravity:     gravity,
+	// 	GravityUnit: "G",
+	// }
 
 	updateOut, err := json.Marshal(update)
 	if err != nil {
@@ -84,8 +86,9 @@ func (bt *BrewTrackerWebhook) Update(beer string, gravity float64, temp float32)
 	}
 
 	if webhookResponse.Result != "success" {
-		return fmt.Errorf("Error from webhook: %s", webhookResponse.Result)
+		return fmt.Errorf("error from webhook: %s", webhookResponse.Result)
 	}
+	fmt.Printf("Successfully updated webhook!")
 	// It all went well!
 	return nil
 }
