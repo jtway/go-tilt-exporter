@@ -6,6 +6,7 @@ type WebhookConfig struct {
 	Name           string        `mapstructure:"name"`
 	Url            string        `mapstructure:"url"`
 	UpdateInterval time.Duration `mapstructure:"update_interval"`
+	Enabled        bool          `mapstructure:"enabled"`
 }
 
 type Config struct {
