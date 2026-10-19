@@ -1,6 +1,7 @@
 package brewfather
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,8 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 )
+
+const tracerName = "github.com/jtway/go-tilt-exporter/pkg/brewfather"
 
 const (
 	api_base_url = "https://api.brewfather.app/v2/"
@@ -30,22 +37,25 @@ func NewBrewfatherClient(config *Config, logger *zap.SugaredLogger) *BrewfatherC
 		logger:   logger,
 		webhooks: make(map[string]*BrewTrackerWebhook),
 	}
+	// otelhttp gives every Brewfather call a client span with W3C propagation.
 	brewClient.client = &http.Client{
-		Timeout: time.Second * 10,
+		Timeout:   time.Second * 10,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 
-	for _, webhookConfig := range config.Webhooks {
+	for i := range config.Webhooks {
+		webhookConfig := &config.Webhooks[i]
 		fmt.Printf("Creating webhook %s, enabled: %t\n", webhookConfig.Name, webhookConfig.Enabled)
-		brewClient.webhooks[webhookConfig.Name] = NewBrewTrackerWebhook(&webhookConfig)
+		brewClient.webhooks[webhookConfig.Name] = NewBrewTrackerWebhook(webhookConfig, brewClient.client)
 	}
 	return brewClient
 }
 
-func (b *BrewfatherClient) GetBatches() ([]BatchShort, error) {
+func (b *BrewfatherClient) GetBatches(ctx context.Context) ([]BatchShort, error) {
 	var batches []BatchShort
-	url := api_base_url + "batches"
+	url := b.baseURL() + "batches"
 
-	request, err := http.NewRequest("GET", url, nil)
+	request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +66,14 @@ func (b *BrewfatherClient) GetBatches() ([]BatchShort, error) {
 		if err != nil {
 			return batches, err
 		}
-		defer response.Body.Close()
-
 		body, err := io.ReadAll(response.Body) // response body is []byte
+		response.Body.Close()
+		if err != nil {
+			return batches, err
+		}
+		if response.StatusCode != http.StatusOK {
+			return batches, fmt.Errorf("brewfather GET batches: %s", response.Status)
+		}
 
 		var batchesPage []BatchShort
 		if err := json.Unmarshal(body, &batchesPage); err != nil { // Parse []byte to the go struct pointer
@@ -86,10 +101,10 @@ func (b *BrewfatherClient) GetBatches() ([]BatchShort, error) {
 	return batches, nil
 }
 
-func (b *BrewfatherClient) GetBatch(batchId string) (*Batch, error) {
-	url := api_base_url + "batches/" + batchId
+func (b *BrewfatherClient) GetBatch(ctx context.Context, batchId string) (*Batch, error) {
+	url := b.baseURL() + "batches/" + batchId
 
-	request, err := http.NewRequest("GET", url, nil)
+	request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +116,12 @@ func (b *BrewfatherClient) GetBatch(batchId string) (*Batch, error) {
 	defer response.Body.Close()
 
 	body, err := io.ReadAll(response.Body) // response body is []byte
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("brewfather GET batch %s: %s", batchId, response.Status)
+	}
 
 	var batch Batch
 	if err := json.Unmarshal(body, &batch); err != nil { // Parse []byte to the go struct pointer
@@ -127,13 +148,31 @@ func (b *BrewfatherClient) GetBatch(batchId string) (*Batch, error) {
 	return &batch, nil
 }
 
-func (b *BrewfatherClient) GetActiveBatches() ([]Batch, error) {
-	batches, err := b.GetBatches()
+func (b *BrewfatherClient) baseURL() string {
+	if b.config.ApiBaseUrl != "" {
+		return strings.TrimSuffix(b.config.ApiBaseUrl, "/") + "/"
+	}
+	return api_base_url
+}
+
+// GetActiveBatches returns fermenting batches with their devices resolved.
+func (b *BrewfatherClient) GetActiveBatches(ctx context.Context) (_ []Batch, err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "brewfather.get_active_batches")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
+	batches, err := b.GetBatches(ctx)
 	if len(batches) == 0 && err != nil {
 		return nil, err
 	}
 	if err != nil {
 		b.logger.Infof("Batches were returned, but so was an error: %s", err.Error())
+		err = nil
 	}
 
 	var activeBatches []Batch
@@ -141,7 +180,7 @@ func (b *BrewfatherClient) GetActiveBatches() ([]Batch, error) {
 		b.logger.Infof("Batch Name: %s, Status: %s", batchShort.Name, batchShort.Status)
 		if batchShort.Status == Fermenting {
 			batchId := batchShort.Id
-			batch, err := b.GetBatch(batchId)
+			batch, err := b.GetBatch(ctx, batchId)
 			if err != nil {
 				return nil, err
 			}
@@ -149,6 +188,10 @@ func (b *BrewfatherClient) GetActiveBatches() ([]Batch, error) {
 			activeBatches = append(activeBatches, *batch)
 		}
 	}
+	span.SetAttributes(
+		attribute.Int("brewfather.batches", len(batches)),
+		attribute.Int("brewfather.active_batches", len(activeBatches)),
+	)
 	return activeBatches, nil
 }
 

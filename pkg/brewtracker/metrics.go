@@ -16,6 +16,8 @@ type metrics struct {
 	beerGravity                 *prometheus.GaugeVec
 	beerTemperatureF            *prometheus.GaugeVec
 	beerTemperatureC            *prometheus.GaugeVec
+	tiltRssi                    *prometheus.GaugeVec
+	tiltLastReading             *prometheus.GaugeVec
 }
 
 func NewMetrics() *metrics {
@@ -76,6 +78,22 @@ func NewMetrics() *metrics {
 			Help:      "latest temperature reading",
 		},
 			[]string{"id", "name", "tilt_color"},
+		),
+		tiltRssi: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "tilt",
+			Name:      "rssi_dbm",
+			Help:      "Signal strength of the latest reading, as seen by the receiver",
+		},
+			[]string{"color", "receiver"},
+		),
+		tiltLastReading: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "tilt",
+			Name:      "last_reading_timestamp_seconds",
+			Help:      "Unix time the latest reading was observed; age = time() - this",
+		},
+			[]string{"color"},
 		),
 	}
 	return m

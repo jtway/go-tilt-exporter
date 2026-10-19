@@ -1,6 +1,12 @@
 package brewfather
 
-import "fmt"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoWebhook means the batch has no matching Brewfather custom stream.
+var ErrNoWebhook = errors.New("no brewtracker webhook attached to batch")
 
 type Status string
 
@@ -158,9 +164,9 @@ func (b *Batch) GetStreams() []Stream {
 	return b.Devices.Streams.Streams
 }
 
-func (b *Batch) UpdateWebhook(update *BrewTrackerStatus) error {
+func (b *Batch) UpdateWebhook(ctx context.Context, update *BrewTrackerStatus) (bool, error) {
 	if b.BrewTracker == nil {
-		return fmt.Errorf("No brewtracker webhook to update")
+		return false, ErrNoWebhook
 	}
-	return b.BrewTracker.Update(update)
+	return b.BrewTracker.Update(ctx, update)
 }
