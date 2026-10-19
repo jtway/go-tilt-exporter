@@ -1,0 +1,145 @@
+# tilt-receiver.yaml — ESP32 Tilt BLE → MQTT receiver (production build).
+#
+# Listens for Tilt hydrometer iBeacons, decodes them on-device, and publishes
+# one retained JSON reading per Tilt color to the broker. It knows nothing about
+# batches or consumers; the broker topic is the contract.
+#
+#   brewery/tilt/v1/<color>                 retained reading (see payload below)
+#   brewery/receiver/v1/<name>/status       online/offline (birth/will), retained
+#   brewery/receiver/v1/<name>/sensor/...   receiver health (WiFi RSSI, uptime)
+#
+# Payload (v1):
+#   {"v":1,"color":"Blue","temp_f":73,"sg":1.012,"rssi":-85,"tx_power":-59,
+#    "receiver":"tilt-receiver","ts":1760900000}
+#   ts = unix seconds from SNTP; 0 until time syncs.
+#   tx_power = the iBeacon power byte (Tilt sometimes sends other data here).
+#
+# Production has no `api:` section, so logs aren't available over WiFi. For bring-up
+# use tilt-receiver-test.yaml, which includes this file and adds `api:`.
+#
+# Needs secrets.yaml beside this file (see secrets.yaml.example).
+#   esphome run tilt-receiver.yaml
+
+substitutions:
+  name: tilt-receiver
+  mqtt_broker: "192.168.1.241"   # Mosquitto LoadBalancer IP in k3s
+  topic_root: brewery
+  # Minimum time between publishes per Tilt color. Readings move slowly; this
+  # caps broker traffic regardless of how often the Tilt advertises.
+  publish_min_interval_ms: "10000"
+
+esphome:
+  name: ${name}
+  friendly_name: Tilt Receiver
+
+esp32:
+  board: esp32dev          # ESP32-D0WD-V3 rev 3.1 (Hosyond WROOM-32)
+  framework:
+    type: esp-idf
+    advanced:
+      minimum_chip_revision: "3.1"
+      sram1_as_iram: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: INFO
+
+ota:
+  platform: esphome
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+mqtt:
+  id: mqtt_client
+  broker: ${mqtt_broker}
+  port: 1883
+  username: tilt-receiver
+  password: !secret mqtt_password
+  client_id: ${name}
+  discovery: false
+  topic_prefix: ${topic_root}/receiver/v1/${name}
+  log_topic: null
+  birth_message:
+    topic: ${topic_root}/receiver/v1/${name}/status
+    payload: online
+    retain: true
+  will_message:
+    topic: ${topic_root}/receiver/v1/${name}/status
+    payload: offline
+    retain: true
+  shutdown_message:
+    topic: ${topic_root}/receiver/v1/${name}/status
+    payload: offline
+    retain: true
+
+sensor:
+  - platform: wifi_signal
+    name: wifi_rssi
+    update_interval: 60s
+  - platform: uptime
+    name: uptime
+    update_interval: 60s
+
+# Scan parameters are left at the defaults: on ESP-IDF >= 5.5.5 with WiFi,
+# ESPHome raises the scan window to the interval and lets the coexistence
+# arbiter share the radio. Don't widen it by hand. ESPHome warns that this
+# starves WiFi.
+esp32_ble_tracker:
+  scan_parameters:
+    active: false          # Tilt puts everything in the advertisement itself
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            auto ib = x.get_ibeacon();
+            if (!ib.has_value()) return;
+
+            // Generic Tilt match on the a495bb UUID prefix; the next hex digit is
+            // the color (1=Red .. 8=Pink). No hardcoded colors.
+            char ubuf[esp32_ble::UUID_STR_LEN];
+            std::string ul = ib->get_uuid().to_str(ubuf);
+            for (auto &c : ul) c = tolower(c);
+            if (ul.rfind("a495bb", 0) != 0 || ul.size() < 7) return;
+            int idx = ul[6] - '0';
+            if (idx < 1 || idx > 8) return;
+            static const char *const COLORS[] = {"", "Red", "Green", "Black", "Purple",
+                                                 "Orange", "Blue", "Yellow", "Pink"};
+            static const char *const TOPICS[] = {"", "red", "green", "black", "purple",
+                                                 "orange", "blue", "yellow", "pink"};
+
+            // Per-color throttle.
+            static uint32_t last_pub[9] = {0};
+            const uint32_t now_ms = millis();
+            if (last_pub[idx] != 0 &&
+                now_ms - last_pub[idx] < (uint32_t) ${publish_min_interval_ms}) return;
+
+            const uint16_t temp_f = ib->get_major();   // whole degrees F
+            const float sg = ib->get_minor() / 1000.0f; // SG x 1000
+            const int rssi = x.get_rssi();
+            const int tx_power = ib->get_signal_power();
+
+            auto t = id(sntp_time).now();
+            const long ts = t.is_valid() ? (long) t.timestamp : 0L;
+
+            char payload[192];
+            snprintf(payload, sizeof(payload),
+                     "{\"v\":1,\"color\":\"%s\",\"temp_f\":%u,\"sg\":%.3f,"
+                     "\"rssi\":%d,\"tx_power\":%d,\"receiver\":\"%s\",\"ts\":%ld}",
+                     COLORS[idx], (unsigned) temp_f, sg, rssi, tx_power,
+                     "${name}", ts);
+            std::string topic = std::string("${topic_root}/tilt/v1/") + TOPICS[idx];
+
+            if (!id(mqtt_client).is_connected()) {
+              ESP_LOGW("tilt", "MQTT not connected; dropped %s reading", COLORS[idx]);
+              return;
+            }
+            if (id(mqtt_client).publish(topic, std::string(payload), (uint8_t) 0, true)) {
+              last_pub[idx] = now_ms;
+              ESP_LOGI("tilt", "PUB %s %s", topic.c_str(), payload);
+            } else {
+              ESP_LOGW("tilt", "publish failed for %s", topic.c_str());
+            }
