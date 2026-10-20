@@ -1,0 +1,58 @@
+# /etc/systemd/system/tilt-exporter.service
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin tilt-exporter
+#   sudo install -d -m 0750 -o root -g tilt-exporter /etc/tilt-exporter
+#   sudo install -m 0640 -o root -g tilt-exporter config.yaml /etc/tilt-exporter/config.yaml
+#   sudo install -m 0640 -o root -g tilt-exporter /dev/null /etc/tilt-exporter/env
+#     (then put TILT_EXPORTER_MQTT_PASSWORD=... in it)
+#   sudo install -m 0755 tilt-exporter /usr/local/bin/tilt-exporter
+#   sudo install -m 0644 deploy/tilt-exporter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tilt-exporter
+
+[Unit]
+Description=go-tilt-exporter (Tilt readings -> Brewfather + Prometheus + traces)
+Documentation=https://github.com/jtway/go-tilt-exporter
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=tilt-exporter
+Group=tilt-exporter
+# Secrets (TILT_EXPORTER_MQTT_PASSWORD, optionally TILT_EXPORTER_BREWFATHER_API_KEY).
+EnvironmentFile=/etc/tilt-exporter/env
+WorkingDirectory=/etc/tilt-exporter
+ExecStart=/usr/local/bin/tilt-exporter
+Restart=on-failure
+RestartSec=10
+# SIGTERM -> graceful shutdown: MQTT disconnect + span flush (<= 5s).
+TimeoutStopSec=15
+
+# Hardening. mqtt mode needs nothing beyond outbound TCP and :9100.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH
+CapabilityBoundingSet=
+# source.type: ble needs raw HCI access. Uncomment both lines (and remove the
+# empty CapabilityBoundingSet= above) to fall back to local Bluetooth scanning.
+#CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+#AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
