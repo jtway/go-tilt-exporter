@@ -4,6 +4,8 @@ Tilt Hydrometer (Unofficial) Exporter written in Golang
 Matches Tilt readings to fermenting Brewfather batches, updates the batch's
 Brewfather custom stream, and exposes Prometheus metrics (`:9100/metrics`).
 
+Long-term plan, handoff and known issues: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
 ## Reading sources
 
 | `source.type` | Where readings come from |
