@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -107,7 +108,8 @@ func (bt *BrewTrackerWebhook) update(ctx context.Context, update *BrewTrackerSta
 		return true, err
 	}
 
-	if webhookResponse.Result != "success" {
+	// Brewfather has answered both "success" and "OK" for an accepted reading.
+	if !strings.EqualFold(webhookResponse.Result, "success") && !strings.EqualFold(webhookResponse.Result, "ok") {
 		return true, fmt.Errorf("error from webhook: %s", webhookResponse.Result)
 	}
 	// It all went well!
