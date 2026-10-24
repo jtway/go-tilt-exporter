@@ -85,6 +85,14 @@ See `config-example.yaml`. Files are read from `/etc/tilt-exporter/config.yaml`,
 `TILT_EXPORTER_BATCH_SYNC_MQTT_PASSWORD`. `brewfather.update_interval` is no longer used;
 see `batch_sync.refresh_interval`.
 
+## Container (k3s)
+
+`Dockerfile` builds a static, distroless, nonroot image (MQTT mode only).
+`scripts/push-ghcr.sh` builds it for `linux/amd64`, pushes it to `ghcr.io/jtway/go-tilt-exporter:<sha>`,
+and prints the `pulumi config set brewtrackerImage …` line. The workload lives in
+`homelab-pulumi` (`components/brewtracker.ts`). In the pod, secrets come from env, and the stream
+URL is written as `url: ${BREWFATHER_STREAM_URL}` in the config, expanded at start-up.
+
 ## Build for the Raspberry Pi
 
 ```bash

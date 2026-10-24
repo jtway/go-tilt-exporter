@@ -253,15 +253,17 @@ automate yet beyond seeing the temperature curve.
 - [x] Mosquitto ACL: a `batch-sync` user that can write `brewery/batch/v1/#`.
 - [x] `traceparent` in every payload a service publishes. Receive spans already continue it.
 
-### Phase C — run it in the cluster
-- [ ] Container image (GHCR, `linux/amd64`), Pulumi component in `homelab-pulumi`, namespace
+### Phase C — run it in the cluster (prepared 2026-10-24; not deployed)
+- [x] Container image (GHCR, `linux/amd64`), Pulumi component in `homelab-pulumi`, namespace
       `brewery`.
 - [ ] In-cluster endpoints: `mosquitto.mqtt.svc:1883` and `otel-gateway.monitoring.svc:4318`.
       This also removes the Pi's `/etc/hosts` workaround.
-- [ ] Secrets through ESO: Brewfather key, MQTT password and stream URL.
+- [x] Secrets through ESO: Brewfather key, MQTT password and stream URL.
 - [ ] Turn off the Pi service. The Pi goes back to being the panel computer; it's a candidate
       for a hot-side or PID adapter later.
-- [ ] Decide then: one Deployment running all components, or one per component. The
+- [x] Decide then: one Deployment running all components, or one per component. **Started with
+      one pod** (`components/brewtracker.ts`). Splitting means more Deployments with different
+      `components:` toggles. The
       flag-per-component binary makes either a config choice.
 
 ### Phase D — brew day (hot side)
@@ -315,6 +317,5 @@ anyway, so automate everything *except* taking the sample.
 
 ## Open decisions
 
-1. Phase C: a single Deployment or one per component?
 2. Whether to move the Conditioning transition earlier (at stalled fermentation, prompted by
    the A2 alert) instead of at kegging.

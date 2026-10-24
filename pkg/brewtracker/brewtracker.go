@@ -2,6 +2,7 @@ package brewtracker
 
 import (
 	"context"
+	"os"
 	"errors"
 
 	"sort"
@@ -60,6 +61,9 @@ func NewBrewTracker(cfg *Config, logger *zap.SugaredLogger) *BrewTracker {
 	httpClient := brewfather.NewHTTPClient()
 	for i := range cfg.Brewfather.Webhooks {
 		w := &cfg.Brewfather.Webhooks[i]
+		// Allows `url: ${BREWFATHER_STREAM_URL}` so the logging id can come
+		// from a secret instead of the config file.
+		w.Url = os.ExpandEnv(w.Url)
 		bt.webhooks[w.Name] = brewfather.NewBrewTrackerWebhook(w, httpClient)
 		logger.Infof("webhook %s configured, enabled: %t", w.Name, w.Enabled)
 	}
