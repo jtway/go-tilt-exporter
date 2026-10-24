@@ -135,7 +135,7 @@ func TestBrokerIntegration(t *testing.T) {
 		Username: "brewtracker",
 		Password: os.Getenv("MQTT_TEST_PASSWORD"),
 		Topic:    "brewery/tilt/v1/+",
-	}, 2*time.Second, 0, zap.NewNop().Sugar())
+	}, "test", 2*time.Second, 0, zap.NewNop().Sugar())
 	if err != nil {
 		t.Fatal(err)
 	}

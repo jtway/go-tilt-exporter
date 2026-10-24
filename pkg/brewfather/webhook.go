@@ -37,6 +37,12 @@ type BrewTrackerStatusResponse struct {
 	Result string `json:"result"`
 }
 
+// Name is the webhook's configured name (matched to a batch's stream name).
+func (bt *BrewTrackerWebhook) Name() string { return bt.config.Name }
+
+// Enabled reports whether posting is turned on in config.
+func (bt *BrewTrackerWebhook) Enabled() bool { return bt.config.Enabled }
+
 func NewBrewTrackerWebhook(config *WebhookConfig, client *http.Client) *BrewTrackerWebhook {
 	webhook := &BrewTrackerWebhook{
 		config: config,

@@ -5,7 +5,8 @@
 #   sudo install -d -m 0750 -o root -g tilt-exporter /etc/tilt-exporter
 #   sudo install -m 0640 -o root -g tilt-exporter config.yaml /etc/tilt-exporter/config.yaml
 #   sudo install -m 0640 -o root -g tilt-exporter /dev/null /etc/tilt-exporter/env
-#     (then put TILT_EXPORTER_MQTT_PASSWORD=... in it)
+#     (then put TILT_EXPORTER_MQTT_PASSWORD=... and
+#      TILT_EXPORTER_BATCH_SYNC_MQTT_PASSWORD=... in it)
 #   sudo install -m 0755 tilt-exporter /usr/local/bin/tilt-exporter
 #   sudo install -m 0644 deploy/tilt-exporter.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now tilt-exporter
@@ -20,7 +21,9 @@ After=network-online.target time-sync.target
 Type=simple
 User=tilt-exporter
 Group=tilt-exporter
-# Secrets (TILT_EXPORTER_MQTT_PASSWORD, optionally TILT_EXPORTER_BREWFATHER_API_KEY).
+# Secrets: TILT_EXPORTER_MQTT_PASSWORD (brewtracker user),
+# TILT_EXPORTER_BATCH_SYNC_MQTT_PASSWORD (batch-sync user), optionally
+# TILT_EXPORTER_BREWFATHER_API_KEY.
 EnvironmentFile=/etc/tilt-exporter/env
 WorkingDirectory=/etc/tilt-exporter
 ExecStart=/usr/local/bin/tilt-exporter

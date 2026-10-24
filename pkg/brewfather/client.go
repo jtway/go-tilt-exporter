@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,136 +17,30 @@ import (
 	"go.uber.org/zap"
 )
 
-const tracerName = "github.com/jtway/go-tilt-exporter/pkg/brewfather"
-
 const (
 	api_base_url = "https://api.brewfather.app/v2/"
+	tracerName   = "github.com/jtway/go-tilt-exporter/pkg/brewfather"
+	pageLimit    = 50 // API max
 )
 
+// BrewfatherClient is the API client. Only batch-sync should use it: the API
+// allows 500 calls/hour per key.
 type BrewfatherClient struct {
 	client *http.Client
 	logger *zap.SugaredLogger
 	config *Config
+}
 
-	webhooks map[string]*BrewTrackerWebhook
+// NewHTTPClient returns an HTTP client whose calls produce client spans.
+func NewHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
 }
 
 func NewBrewfatherClient(config *Config, logger *zap.SugaredLogger) *BrewfatherClient {
-
-	brewClient := &BrewfatherClient{
-		config:   config,
-		logger:   logger,
-		webhooks: make(map[string]*BrewTrackerWebhook),
-	}
-	// otelhttp gives every Brewfather call a client span with W3C propagation.
-	brewClient.client = &http.Client{
-		Timeout:   time.Second * 10,
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
-
-	for i := range config.Webhooks {
-		webhookConfig := &config.Webhooks[i]
-		fmt.Printf("Creating webhook %s, enabled: %t\n", webhookConfig.Name, webhookConfig.Enabled)
-		brewClient.webhooks[webhookConfig.Name] = NewBrewTrackerWebhook(webhookConfig, brewClient.client)
-	}
-	return brewClient
-}
-
-func (b *BrewfatherClient) GetBatches(ctx context.Context) ([]BatchShort, error) {
-	var batches []BatchShort
-	url := b.baseURL() + "batches"
-
-	request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(b.config.UserId, b.config.ApiKey)
-
-	for {
-		response, err := b.client.Do(request)
-		if err != nil {
-			return batches, err
-		}
-		body, err := io.ReadAll(response.Body) // response body is []byte
-		response.Body.Close()
-		if err != nil {
-			return batches, err
-		}
-		if response.StatusCode != http.StatusOK {
-			return batches, fmt.Errorf("brewfather GET batches: %s", response.Status)
-		}
-
-		var batchesPage []BatchShort
-		if err := json.Unmarshal(body, &batchesPage); err != nil { // Parse []byte to the go struct pointer
-			return batches, fmt.Errorf("Can not unmarshal JSON")
-		}
-
-		batchesReturned := len(batchesPage)
-		b.logger.Infof("returned %d batches", batchesReturned)
-		for _, batch := range batchesPage {
-			b.logger.Infof("batch: %s, batch: id: %s, status: %s", batch.Name, batch.Id, batch.Status)
-		}
-		if batchesReturned == 0 {
-			break
-		}
-
-		batches = append(batches, batchesPage...)
-
-		time.Sleep(1)
-		queryValues := request.URL.Query()
-		queryValues.Set("start_after", batchesPage[batchesReturned-1].Id)
-		request.URL.RawQuery = queryValues.Encode()
-		b.logger.Infof("attempting to get more batches. Starting after: %s", batchesPage[batchesReturned-1].Id)
-		b.logger.Infof("URL: %v", request.URL)
-	}
-	return batches, nil
-}
-
-func (b *BrewfatherClient) GetBatch(ctx context.Context, batchId string) (*Batch, error) {
-	url := b.baseURL() + "batches/" + batchId
-
-	request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(b.config.UserId, b.config.ApiKey)
-	response, err := b.client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body) // response body is []byte
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("brewfather GET batch %s: %s", batchId, response.Status)
-	}
-
-	var batch Batch
-	if err := json.Unmarshal(body, &batch); err != nil { // Parse []byte to the go struct pointer
-		return nil, fmt.Errorf("Can not unmarshal JSON")
-	}
-	tilts := batch.GetTilts()
-	if len(tilts) != 0 {
-		for _, t := range tilts {
-			fmt.Printf("Found tilt %s, enabled %t (batch-id: %s)\n", t.Key, t.Enabled, t.BatchId)
-		}
-	}
-	streams := batch.GetStreams()
-	if len(streams) != 0 {
-		for _, stream := range streams {
-			for name, webhook := range b.webhooks {
-				if strings.EqualFold(stream.Name, name) {
-					fmt.Printf("Attached webhook %s to %s\n", name, batch.Name)
-					batch.BrewTracker = webhook
-
-				}
-			}
-		}
-	}
-	return &batch, nil
+	return &BrewfatherClient{config: config, logger: logger, client: NewHTTPClient()}
 }
 
 func (b *BrewfatherClient) baseURL() string {
@@ -155,8 +50,68 @@ func (b *BrewfatherClient) baseURL() string {
 	return api_base_url
 }
 
-// GetActiveBatches returns fermenting batches with their devices resolved.
-func (b *BrewfatherClient) GetActiveBatches(ctx context.Context) (_ []Batch, err error) {
+func (b *BrewfatherClient) get(ctx context.Context, path string, q url.Values, out any) error {
+	u := b.baseURL() + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(b.config.UserId, b.config.ApiKey)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("brewfather GET %s: %s", path, resp.Status)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("brewfather GET %s: decode: %w", path, err)
+	}
+	return nil
+}
+
+// GetBatchesByStatus lists batches in one status, paging 50 at a time.
+func (b *BrewfatherClient) GetBatchesByStatus(ctx context.Context, status Status) ([]BatchShort, error) {
+	var all []BatchShort
+	q := url.Values{"status": {string(status)}, "limit": {fmt.Sprint(pageLimit)}}
+	for {
+		var page []BatchShort
+		if err := b.get(ctx, "batches", q, &page); err != nil {
+			return all, err
+		}
+		// Belt and braces: don't trust the filter blindly.
+		for _, p := range page {
+			if p.Status == status {
+				all = append(all, p)
+			}
+		}
+		if len(page) < pageLimit {
+			return all, nil
+		}
+		q.Set("start_after", page[len(page)-1].Id)
+	}
+}
+
+// GetBatch fetches one full batch (devices, recipe, measured values).
+func (b *BrewfatherClient) GetBatch(ctx context.Context, batchId string) (*Batch, error) {
+	var batch Batch
+	if err := b.get(ctx, "batches/"+url.PathEscape(batchId), nil, &batch); err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+// GetActiveBatches returns full batches in any of the given statuses. It
+// costs one list call per status plus one call per batch found.
+func (b *BrewfatherClient) GetActiveBatches(ctx context.Context, statuses []Status) (_ []Batch, err error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "brewfather.get_active_batches")
 	defer func() {
 		if err != nil {
@@ -166,44 +121,20 @@ func (b *BrewfatherClient) GetActiveBatches(ctx context.Context) (_ []Batch, err
 		span.End()
 	}()
 
-	batches, err := b.GetBatches(ctx)
-	if len(batches) == 0 && err != nil {
-		return nil, err
-	}
-	if err != nil {
-		b.logger.Infof("Batches were returned, but so was an error: %s", err.Error())
-		err = nil
-	}
-
-	var activeBatches []Batch
-	for _, batchShort := range batches {
-		b.logger.Infof("Batch Name: %s, Status: %s", batchShort.Name, batchShort.Status)
-		if batchShort.Status == Fermenting {
-			batchId := batchShort.Id
-			batch, err := b.GetBatch(ctx, batchId)
+	var active []Batch
+	for _, st := range statuses {
+		shorts, err := b.GetBatchesByStatus(ctx, st)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range shorts {
+			batch, err := b.GetBatch(ctx, s.Id)
 			if err != nil {
 				return nil, err
 			}
-
-			activeBatches = append(activeBatches, *batch)
+			active = append(active, *batch)
 		}
 	}
-	span.SetAttributes(
-		attribute.Int("brewfather.batches", len(batches)),
-		attribute.Int("brewfather.active_batches", len(activeBatches)),
-	)
-	return activeBatches, nil
-}
-
-// @TODO(jtway) Currently there is only one webhook. Down the road I may
-// need to change this up a bit
-func (b *BrewfatherClient) GetWebhook() *BrewTrackerWebhook {
-	for key, webhook := range b.webhooks {
-		if webhook.config.Enabled {
-			return webhook
-		} else {
-			fmt.Printf("Webhook %s is not enabled\n", key)
-		}
-	}
-	return nil
+	span.SetAttributes(attribute.Int("brewfather.active_batches", len(active)))
+	return active, nil
 }

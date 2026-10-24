@@ -1,6 +1,6 @@
 # Brewery telemetry — architecture and roadmap
 
-Status: **reviewed 2026-10-24** (decisions recorded below). First written 2026-10-20 after the MQTT + tracing phase shipped.
+Status: **phases A and B done 2026-10-24** (branch `feature/batch-sync`). Decisions recorded below. First written 2026-10-20 after the MQTT + tracing phase shipped.
 Owner: Josh. This file is the long-term plan; the README describes what exists today.
 
 ## Where we are (2026-10-20)
@@ -29,6 +29,30 @@ Tilt ──BLE──▶ ESP32 tilt-receiver ──MQTT──▶ Mosquitto (k3s, 
   - `otlp.lab.jtway.com` resolves through `/etc/hosts`, because the Pi's resolver goes to Google DNS, not AdGuard.
   - Go is at `/usr/local/go` (1.27.3).
 - **Vault:** `Tway AI/memory/domain/brewery-panel.md`, the ESP32 item, has the dated history.
+
+### What A+B changed (2026-10-24, `feature/batch-sync`)
+
+- **Components:** batch-sync, brewtracker and device-metrics run in one binary, each with its
+  own MQTT client (ids `…-batch-sync`, `…-brewtracker`, `…-brewtracker-batches`,
+  `…-device-metrics`). They're switched on and off under `components:`.
+- **Batch topics:** batch-sync is the only Brewfather API client. It publishes retained
+  `brewery/batch/v1/<id>` and `brewery/batch/v1/index`. On startup it reads the existing
+  retained batch topics and clears any batch that's no longer active.
+- **Deployment requirements:**
+  - The new Mosquitto user `batch-sync` needs the field `BATCH_SYNC_PASSWORD` on the
+    1Password item before `pulumi up`.
+  - The Pi needs `TILT_EXPORTER_BATCH_SYNC_MQTT_PASSWORD` in `/etc/tilt-exporter/env`.
+- **Defaults changed:**
+  - `source.type` now defaults to `mqtt`.
+  - `mqtt.broker` is required, because batch state comes from the broker even in BLE mode.
+  - `brewfather.update_interval` is ignored; `batch_sync.refresh_interval` replaces it (5m).
+- **Verified end to end** against a real mosquitto with the same ACLs, a stubbed Brewfather and
+  a stubbed OTLP collector. A stale retained batch was cleared on startup, the Fermenting batch
+  was tracked, a Tilt with no batch got device series only, and Fermenting → Completed removed
+  every batch series and the retained topic while the device series stayed.
+- **Not verified against the real Brewfather API:** the `status` filter, and decoding
+  `recipe.mash/fermentation.steps` (`stepTemp`/`stepTime`). Check both with the first real
+  Fermenting batch.
 
 ## Problems to solve next (confirmed in code)
 
@@ -201,32 +225,33 @@ automate yet beyond seeing the temperature curve.
 
 ## Phases
 
-### Phase A — correctness (small; next branch, before containerizing)
-- [ ] Replace the batch list on *every* successful refresh, including an empty one. On a failed
+### Phase A — correctness (done 2026-10-24)
+- [x] Replace the batch list on *every* successful refresh, including an empty one. On a failed
       call, keep the old list but mark it stale.
-- [ ] Delete batch-scoped series when a batch leaves the active set.
-- [ ] Device series for every Tilt seen, whether or not it's bound to a batch, with stale deletion.
-- [ ] Batch-scoped work only for Tilts bound to an active batch. Brewfather's
+- [x] Delete batch-scoped series when a batch leaves the active set.
+- [x] Device series for every Tilt seen, whether or not it's bound to a batch, with stale deletion.
+- [x] Batch-scoped work only for Tilts bound to an active batch. Brewfather's
       `devices.tilt` binding stays the source of truth.
-- [ ] Use `?status=Fermenting&include=…` and drop the page-everything loop.
-- [ ] Refresh batches every ~5 minutes (12 calls/hour) instead of 15, so status changes show
+- [x] Use `?status=<status>` and drop the page-everything loop. (`include=` isn't used: each active
+      batch is fetched in full, one call each, which is the known-good path.)
+- [x] Refresh batches every ~5 minutes (12 calls/hour) instead of 15, so status changes show
       up quickly.
-- [ ] Add `brewtracker_batch_info` and the device series `brewtracker_tilt_gravity` / `_temperature_f`.
+- [x] Add `brewtracker_batch_info` and the device series `brewtracker_tilt_gravity` / `_temperature_f`.
       Existing `brewtracker_*` names and labels stay unchanged (the dashboard depends on them).
-- [ ] Status handling per the lifecycle table, with a `track_conditioning` option (default off).
+- [x] Status handling per the lifecycle table, with a `track_conditioning` option (default off).
 
 ### Phase A2 — fermentation-done nudge (needs the in-cluster alerting work)
 - [ ] VMRule: 48h flat gravity on a Fermenting batch → Alertmanager → HA mobile push.
 - [ ] Tune the threshold and window against the history of a past batch before turning it on.
 
-### Phase B — contracts inside one binary
-- [ ] `batch-sync` package: Brewfather → `brewery/batch/v1/*` (retained, empty payload = inactive).
-- [ ] `brewtracker` reads batch state *from the broker*, not by calling the sync package directly.
+### Phase B — contracts inside one binary (done 2026-10-24)
+- [x] `batch-sync` package: Brewfather → `brewery/batch/v1/*` (retained, empty payload = inactive).
+- [x] `brewtracker` reads batch state *from the broker*, not by calling the sync package directly.
       It also reads `brewery/tilt/v1/*`, as it does today. This is the seam that makes the later
       split free.
-- [ ] `device-metrics` package with its own subscription.
-- [ ] Mosquitto ACL: a `batch-sync` user that can write `brewery/batch/v1/#`.
-- [ ] `traceparent` in every payload a service publishes. Receive spans already continue it.
+- [x] `device-metrics` package with its own subscription.
+- [x] Mosquitto ACL: a `batch-sync` user that can write `brewery/batch/v1/#`.
+- [x] `traceparent` in every payload a service publishes. Receive spans already continue it.
 
 ### Phase C — run it in the cluster
 - [ ] Container image (GHCR, `linux/amd64`), Pulumi component in `homelab-pulumi`, namespace

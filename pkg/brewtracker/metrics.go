@@ -1,6 +1,8 @@
 package brewtracker
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -16,11 +18,21 @@ type metrics struct {
 	beerGravity                 *prometheus.GaugeVec
 	beerTemperatureF            *prometheus.GaugeVec
 	beerTemperatureC            *prometheus.GaugeVec
-	tiltRssi                    *prometheus.GaugeVec
-	tiltLastReading             *prometheus.GaugeVec
+	batchInfo                   *prometheus.GaugeVec
 }
 
+var (
+	metricsOnce sync.Once
+	metricsInst *metrics
+)
+
+// NewMetrics returns the process-wide batch metrics (registered once).
 func NewMetrics() *metrics {
+	metricsOnce.Do(func() { metricsInst = newMetrics() })
+	return metricsInst
+}
+
+func newMetrics() *metrics {
 	m := &metrics{
 		beerReading: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -79,22 +91,25 @@ func NewMetrics() *metrics {
 		},
 			[]string{"id", "name", "tilt_color"},
 		),
-		tiltRssi: promauto.NewGaugeVec(prometheus.GaugeOpts{
+		batchInfo: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace,
-			Subsystem: "tilt",
-			Name:      "rssi_dbm",
-			Help:      "Signal strength of the latest reading, as seen by the receiver",
+			Subsystem: "batch",
+			Name:      "info",
+			Help:      "1 for each active batch and bound Tilt color; join on tilt_color",
 		},
-			[]string{"color", "receiver"},
-		),
-		tiltLastReading: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: Namespace,
-			Subsystem: "tilt",
-			Name:      "last_reading_timestamp_seconds",
-			Help:      "Unix time the latest reading was observed; age = time() - this",
-		},
-			[]string{"color"},
+			[]string{"id", "name", "status", "tilt_color"},
 		),
 	}
 	return m
+}
+
+// deleteBatch removes every batch-scoped series for a batch id.
+func (m *metrics) deleteBatch(id string) {
+	l := prometheus.Labels{"id": id}
+	for _, v := range []*prometheus.GaugeVec{
+		m.beerMeasuredOriginalGravity, m.beerEstimatedFinalGravity, m.beerEstimatedIbu,
+		m.beerEstimatedSrm, m.beerGravity, m.beerTemperatureF, m.beerTemperatureC, m.batchInfo,
+	} {
+		v.DeletePartialMatch(l)
+	}
 }

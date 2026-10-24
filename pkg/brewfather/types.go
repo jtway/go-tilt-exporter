@@ -1,8 +1,8 @@
 package brewfather
 
 import (
-	"context"
 	"errors"
+	"strings"
 )
 
 // ErrNoWebhook means the batch has no matching Brewfather custom stream.
@@ -143,7 +143,8 @@ type Batch struct {
 	MeasuredOg               float32 `json:"measuredOg"`
 	Brewer                   string  `json:"brewer"`
 
-	BrewTracker *BrewTrackerWebhook `json:"-"`
+	// Recipe is only partially decoded: the steps used as targets.
+	Recipe *BatchRecipe `json:"recipe,omitempty"`
 }
 
 func (b *Batch) GetTilts() []TiltDevice {
@@ -164,9 +165,53 @@ func (b *Batch) GetStreams() []Stream {
 	return b.Devices.Streams.Streams
 }
 
-func (b *Batch) UpdateWebhook(ctx context.Context, update *BrewTrackerStatus) (bool, error) {
-	if b.BrewTracker == nil {
-		return false, ErrNoWebhook
+// BatchRecipe holds the recipe parts batch-sync publishes as targets.
+type BatchRecipe struct {
+	Name string `json:"name"`
+	Mash *struct {
+		Steps []RecipeStep `json:"steps"`
+	} `json:"mash,omitempty"`
+	Fermentation *struct {
+		Steps []RecipeStep `json:"steps"`
+	} `json:"fermentation,omitempty"`
+}
+
+// RecipeStep is a mash or fermentation step. The API returns metric units:
+// stepTemp in °C; stepTime in minutes (mash) or days (fermentation).
+type RecipeStep struct {
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	StepTemp float64 `json:"stepTemp"`
+	StepTime float64 `json:"stepTime"`
+}
+
+// TiltColors returns the enabled Tilt bindings as title-case colors ("Blue").
+func (b *Batch) TiltColors() []string {
+	var out []string
+	for _, t := range b.Devices.Tilt.Items {
+		if !t.Enabled {
+			continue
+		}
+		name := t.Name
+		if name == "" {
+			name = string(t.Key)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, strings.ToUpper(name[:1])+strings.ToLower(name[1:]))
 	}
-	return b.BrewTracker.Update(ctx, update)
+	return out
+}
+
+// StreamNames returns the names of custom streams attached to the batch.
+func (b *Batch) StreamNames() []string {
+	var out []string
+	for _, s := range b.Devices.Streams.Streams {
+		if s.Name != "" {
+			out = append(out, s.Name)
+		}
+	}
+	return out
 }

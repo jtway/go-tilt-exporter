@@ -1,43 +1,60 @@
+# go-tilt-exporter — one binary, three components that only meet via the broker:
+#   batch-sync     Brewfather API -> brewery/batch/v1/<id> (retained)
+#   brewtracker    Tilt readings x batch state -> batch metrics + Brewfather stream
+#   device-metrics Tilt readings -> one series per Tilt (no batch needed)
+# Any component can be switched off here and run as its own service later.
+components:
+  batch_sync: true
+  brewtracker: true
+  device_metrics: true
+
 brewfather:
-  # User ID from Brewfather
+  # API credentials (used by batch-sync only). Prefer env:
+  #   TILT_EXPORTER_BREWFATHER_USER_ID / TILT_EXPORTER_BREWFATHER_API_KEY
   user_id: "your_user_id"
-  # API Key from Brewfather (or env TILT_EXPORTER_BREWFATHER_API_KEY)
   api_key: "your_api_key"
-  # Frequency at which the Brewfather API will be queried for in-progress batches
-  update_interval: 15m
-  # Webhooks here show up as custom streams. When taking readings from a Tilt,
-  # if there is a matching stream associated with a batch it will automatically update
+  # Custom streams. A batch posts to the webhook whose name matches a stream
+  # attached to that batch in Brewfather. Brewfather accepts one post per 15
+  # minutes per device name.
   webhooks:
     - name: "brewtracker"
       url: "http://log.brewfather.net/stream?id=your_id"
       update_interval: 15m
       enabled: true
+
+batch_sync:
+  # How often to poll Brewfather (each poll costs 1 call per status + 1 per
+  # active batch; the API allows 500/hour).
+  refresh_interval: 5m
+  # Brewfather statuses treated as active. Status is set by hand in the app;
+  # this only follows it.
+  statuses: [Fermenting]
+  # Also track Conditioning (e.g. watching temperature through a cold crash).
+  track_conditioning: false
+  mqtt_username: batch-sync
+  # env TILT_EXPORTER_BATCH_SYNC_MQTT_PASSWORD
+
 prom:
-  # Prometheus port to expose metrics on
   port: 9100
 
-# Where Tilt readings come from.
 source:
-  # "mqtt": subscribe to readings published by ESP32 tilt-receivers (esphome/).
-  # "ble":  scan with this machine's Bluetooth adapter (the original mode).
+  # "mqtt": readings from ESP32 tilt-receivers (esphome/). "ble": scan with
+  # this machine's Bluetooth adapter. Batch state always comes from the broker.
   type: mqtt
-  # How often readings are processed; in BLE mode also the scan duration.
   cycle_interval: 15s
-  # Drop readings older than this (e.g. a retained message from a dead receiver).
+  # Readings older than this are ignored, and device series are removed.
   max_reading_age: 5m
 
 mqtt:
   broker: tcp://192.168.1.241:1883
+  # brewtracker and device-metrics read with this (read-only) user.
   username: brewtracker
-  # Prefer the env var TILT_EXPORTER_MQTT_PASSWORD over putting it here.
-  password: ""
+  # env TILT_EXPORTER_MQTT_PASSWORD
   topic: brewery/tilt/v1/+
-  # client_id defaults to go-tilt-exporter-<hostname>
+  topic_root: brewery
 
 tracing:
   enabled: true
-  # OTLP/HTTP base URL (the in-cluster otel-gateway via the shared Gateway).
-  # Standard OTEL_EXPORTER_OTLP_* env vars work too when this is empty.
   endpoint: https://otlp.lab.jtway.com
   service_name: go-tilt-exporter
   sample_ratio: 1.0
