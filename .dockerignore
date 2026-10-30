@@ -1,0 +1,7 @@
+.git
+.DS_Store
+esphome/
+deploy/
+docs/
+tilt-exporter
+config.yaml

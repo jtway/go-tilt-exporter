@@ -19,3 +19,7 @@
 
 # Go workspace file
 go.work
+
+# local build output / config
+tilt-exporter
+config.yaml

@@ -1,6 +1,8 @@
 package brewtracker
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -16,9 +18,21 @@ type metrics struct {
 	beerGravity                 *prometheus.GaugeVec
 	beerTemperatureF            *prometheus.GaugeVec
 	beerTemperatureC            *prometheus.GaugeVec
+	batchInfo                   *prometheus.GaugeVec
 }
 
+var (
+	metricsOnce sync.Once
+	metricsInst *metrics
+)
+
+// NewMetrics returns the process-wide batch metrics (registered once).
 func NewMetrics() *metrics {
+	metricsOnce.Do(func() { metricsInst = newMetrics() })
+	return metricsInst
+}
+
+func newMetrics() *metrics {
 	m := &metrics{
 		beerReading: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -77,6 +91,25 @@ func NewMetrics() *metrics {
 		},
 			[]string{"id", "name", "tilt_color"},
 		),
+		batchInfo: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "batch",
+			Name:      "info",
+			Help:      "1 for each active batch and bound Tilt color; join on tilt_color",
+		},
+			[]string{"id", "name", "status", "tilt_color"},
+		),
 	}
 	return m
+}
+
+// deleteBatch removes every batch-scoped series for a batch id.
+func (m *metrics) deleteBatch(id string) {
+	l := prometheus.Labels{"id": id}
+	for _, v := range []*prometheus.GaugeVec{
+		m.beerMeasuredOriginalGravity, m.beerEstimatedFinalGravity, m.beerEstimatedIbu,
+		m.beerEstimatedSrm, m.beerGravity, m.beerTemperatureF, m.beerTemperatureC, m.batchInfo,
+	} {
+		v.DeletePartialMatch(l)
+	}
 }

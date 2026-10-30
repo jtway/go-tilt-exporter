@@ -57,7 +57,7 @@ func (s *Scanner) Scan(timeout time.Duration) {
 		case context.Canceled:
 			log.Printf("Cancelled\n")
 		default:
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		}
 	}
 }

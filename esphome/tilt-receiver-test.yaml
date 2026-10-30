@@ -1,0 +1,22 @@
+# tilt-receiver-test.yaml — the production receiver plus bring-up conveniences.
+#
+# Same MQTT publishing as tilt-receiver.yaml, but adds `api:` so
+# `esphome logs tilt-receiver-test.yaml` streams over WiFi. Every publish is
+# logged as a "PUB brewery/tilt/v1/<color> {...}" line.
+#
+# Once readings land in the broker and go-tilt-exporter consumes them, flash
+# tilt-receiver.yaml (no api) and stop using this file.
+
+packages:
+  receiver: !include tilt-receiver.yaml
+
+# Present ONLY for log streaming. reboot_timeout: 0s stops the 15-minute
+# "no API client" reboot.
+api:
+  reboot_timeout: 0s
+
+logger:
+  level: DEBUG
+  logs:
+    esp32_ble_tracker: INFO
+    sensor: INFO
